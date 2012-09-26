@@ -1,0 +1,190 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import os
+import sys
+import time
+import urllib2
+import boto
+try:
+    import simplejson as json
+except ImportError:
+    import json
+
+import ec2
+
+__author__ = 'Matt Robenolt <matt@ydekproductions.com>'
+__version__ = '0.1.0'
+
+CREDENTIALS_TEMPLATE = """
+"User Name","Access Key Id","Secret Access Key"
+"","{0}","{1}"
+""".strip()
+
+USER = os.path.expanduser('~')
+CONFIG_PATH = os.path.join(USER, '.firewall')
+CONFIG_FILE = os.path.join(CONFIG_PATH, 'configuration.csv')
+
+
+def configure():
+    import os
+
+    if os.path.isfile(CONFIG_FILE):
+        overwrite = raw_input('Configuration file already exists.\nDo you want to overwrite? (y/n) ')
+        if not overwrite.lower() == 'y':
+            sys.exit(1)
+
+    try:
+        access_id = raw_input('AWS Access Key Id: ')
+        secret_key = raw_input('AWS Secret Access Key: ')
+    except KeyboardInterrupt:
+        log('\n')  # End cleanly
+        sys.exit(1)
+
+    try:
+        os.mkdir(CONFIG_PATH)
+    except OSError:
+        pass  # ~/.firewall exists
+
+    with open(CONFIG_FILE, 'w') as fp:
+        fp.write(CREDENTIALS_TEMPLATE.format(access_id, secret_key))
+
+    log(ok('✔  Ready.\n'))
+
+
+def log(what, where=sys.stdout):
+    where.write(what)
+    where.flush()
+
+
+def ok(txt):
+    return '\033[92m{0}\033[0m'.format(txt)
+
+
+def fail(txt):
+    return '\033[91m{0}\033[0m'.format(txt)
+
+
+class Port(object):
+    def __init__(self, port):
+        self.port = int(port)
+        self.added = False
+
+    def __str__(self):
+        return str(self.port)
+
+    def __unicode__(self):
+        return unicode(self.__str__())
+
+    def __repr__(self):
+        return u'<Port: {0}>'.format(self.__unicode__())
+
+
+class Firewall(object):
+    group = None
+
+    def __init__(self, group_name, ports, config):
+        self.group_name = group_name
+        self.ports = ports
+
+        try:
+            ec2.credentials.from_file(config)
+        except IOError:
+            log(fail('✗  Configuration file not found.\n'))
+            log('Run `firewall --configure` first.\n')
+            sys.exit(1)
+
+    def main(self):
+        log('Looking up public IP... ')
+
+        try:
+            self.ip = json.load(urllib2.urlopen('http://jsonip.com/'))['ip']
+        except Exception:
+            log(fail('✗\n'))
+            sys.exit(1)
+
+        self.cidr_ip = '{0}/32'.format(self.ip)
+
+        log(ok('✔  {0}'.format(self.ip)))
+        log('\nLooking up security group "{0}"... '.format(self.group_name))
+
+        try:
+            self.group = ec2.security_groups.get(name__iexact=self.group_name)
+        except boto.exception.EC2ResponseError as e:
+            log(fail('✗  invalid AWS credentials\n'))
+            sys.exit(1)
+        except ec2.security_groups.DoesNotExist:
+            log(fail('✗  not found\n'))
+            sys.exit(1)
+        except ec2.security_groups.MultipleObjectsReturned:
+            log(fail('✗  multiple groups found\n'))
+            sys.exit(1)
+
+        log(ok('✔  {0}'.format(self.group.id)))
+        for port in self.ports:
+            log('\nOpening port {0}... '.format(port))
+            try:
+                self.group.authorize('tcp', port, port, cidr_ip=self.cidr_ip)
+            except boto.exception.EC2ResponseError as e:
+                for reason, message in e.errors:
+                    if reason == 'InvalidPermission.Duplicate':
+                        log(fail('✗  already open'))
+                    else:
+                        log(fail('✗  unknown error'))
+            else:
+                port.added = True
+                log(ok('✔'))
+
+        # Check if any of the ports succeeded being opened
+        if not any([port.added for port in self.ports]):
+            log(fail('\nNo ports could be opened. :(\n'))
+            sys.exit(1)
+
+        log('\n\nCONTROL-C to exit.\n')
+
+    def cleanup(self):
+        if self.group is None:
+            return
+        for port in self.ports:
+            if port.added:
+                log('\nClosing port {0}... '.format(port))
+                self.group.revoke('tcp', port, port, cidr_ip=self.cidr_ip)
+                log(ok('✔'))
+        log('\n')
+
+
+if __name__ == '__main__':
+    from optparse import OptionParser
+    parser = OptionParser(usage="%prog [SECURITY GROUP]", version=__version__)
+    parser.add_option('-p', '--ports',
+        dest='ports', default='22', help='Comma-separated list of ports to open')
+    parser.add_option('-i',
+        dest='config', default=CONFIG_FILE, help='Path to configuration file')
+    parser.add_option('--configure',
+        dest='configure', action='store_true', help='Run initial setup')
+    opts, args = parser.parse_args()
+
+    if opts.configure:
+        sys.exit(configure())
+
+    if len(args) == 0:
+        parser.error('incorrect number of arguments')
+
+    try:
+        ports = map(Port, set(opts.ports.split(',')))
+    except ValueError:
+        parser.error('ports must be integers')
+
+    fw = Firewall(args[0], ports, opts.config)
+    fw.main()
+
+    # Make sure we clean up after ourselves!
+    import atexit
+    atexit.register(fw.cleanup)
+
+    try:
+        # Hang until we exit the script
+        while 1:
+            time.sleep(5)
+    except KeyboardInterrupt:
+        pass
