@@ -18,7 +18,7 @@ setup(
     long_description=__doc__,
     install_requires=[
         'boto',
-        'ec2',
+        'ec2>=0.2',
     ],
     scripts=['bin/firewall'],
     zip_safe=False,
