@@ -9,7 +9,7 @@ import boto
 try:
     import simplejson as json
 except ImportError:
-    import json
+    import json #noqa
 
 import ec2
 
@@ -81,10 +81,10 @@ class Port(object):
 
 
 class Firewall(object):
-    group = None
+    groups = []
 
-    def __init__(self, group_name, ports, config):
-        self.group_name = group_name
+    def __init__(self, group_names, ports, config):
+        self.group_names = group_names
         self.ports = ports
 
         try:
@@ -98,7 +98,7 @@ class Firewall(object):
         log('Looking up public IP... ')
 
         try:
-            self.ip = json.load(urllib2.urlopen('http://jsonip.com/'))['ip']
+            self.ip = urllib2.urlopen('http://icanhazip.com/').read().strip()
         except Exception:
             log(fail('✗\n'))
             sys.exit(1)
@@ -106,50 +106,57 @@ class Firewall(object):
         self.cidr_ip = '{0}/32'.format(self.ip)
 
         log(ok('✔  {0}'.format(self.ip)))
-        log('\nLooking up security group "{0}"... '.format(self.group_name))
+        for group_name in self.group_names.split(','):
+            log('\nLooking up security group "{0}"... '.format(group_name))
 
-        try:
-            self.group = ec2.security_groups.get(name__iexact=self.group_name)
-        except boto.exception.EC2ResponseError as e:
-            log(fail('✗  invalid AWS credentials\n'))
-            sys.exit(1)
-        except ec2.security_groups.DoesNotExist:
-            log(fail('✗  not found\n'))
-            sys.exit(1)
-        except ec2.security_groups.MultipleObjectsReturned:
-            log(fail('✗  multiple groups found\n'))
-            sys.exit(1)
-
-        log(ok('✔  {0}'.format(self.group.id)))
-        for port in self.ports:
-            log('\nOpening port {0}... '.format(port))
             try:
-                self.group.authorize('tcp', port, port, cidr_ip=self.cidr_ip)
+                group = {
+                    'group': ec2.security_groups.get(name__iexact=group_name),
+                    'ports': []
+                }
+                self.groups.append(group)
             except boto.exception.EC2ResponseError as e:
-                for reason, message in e.errors:
-                    if reason == 'InvalidPermission.Duplicate':
-                        log(fail('✗  already open'))
-                    else:
-                        log(fail('✗  unknown error'))
-            else:
-                port.added = True
-                log(ok('✔'))
+                log(fail('✗  invalid AWS credentials\n'))
+                sys.exit(1)
+            except ec2.security_groups.DoesNotExist:
+                log(fail('✗  not found\n'))
+                continue
+            except ec2.security_groups.MultipleObjectsReturned:
+                log(fail('✗  multiple groups found\n'))
+                continue
+
+            log(ok('✔  {0}'.format(group['group'].id)))
+            for port in self.ports:
+                group['ports'].append(port)
+                log('\nOpening port {0}... '.format(port))
+                try:
+                    group['group'].authorize('tcp', port, port, cidr_ip=self.cidr_ip)
+                except boto.exception.EC2ResponseError as e:
+                    for reason, message in e.errors:
+                        if reason == 'InvalidPermission.Duplicate':
+                            log(fail('✗  already open'))
+                        else:
+                            log(fail('✗  unknown error'))
+                else:
+                    port.added = True
+                    log(ok('✔'))
 
         # Check if any of the ports succeeded being opened
-        if not any([port.added for port in self.ports]):
+        if not any([port.added for group in self.groups for port in group['ports']]):
             log(fail('\nNo ports could be opened. :(\n'))
             sys.exit(1)
 
         log('\n\nCONTROL-C to exit.\n')
 
     def cleanup(self):
-        if self.group is None:
+        if not self.groups:
             return
-        for port in self.ports:
-            if port.added:
-                log('\nClosing port {0}... '.format(port))
-                self.group.revoke('tcp', port, port, cidr_ip=self.cidr_ip)
-                log(ok('✔'))
+        for group in self.groups:
+            for port in group['ports']:
+                if port.added:
+                    log('\nClosing port {0}... '.format(port))
+                    group['group'].revoke('tcp', port, port, cidr_ip=self.cidr_ip)
+                    log(ok('✔'))
         log('\n')
 
 
