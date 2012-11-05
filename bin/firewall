@@ -162,7 +162,7 @@ class Firewall(object):
 
 if __name__ == '__main__':
     from optparse import OptionParser
-    parser = OptionParser(usage="%prog [SECURITY GROUP]", version=__version__)
+    parser = OptionParser(usage="%prog [SECURITY GROUP][,SECURITY GROUP]", version=__version__)
     parser.add_option('-p', '--ports',
         dest='ports', default='22', help='Comma-separated list of ports to open')
     parser.add_option('-i',
