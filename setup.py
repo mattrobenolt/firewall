@@ -2,7 +2,7 @@
 """
 firewall
 ======
-
+Punch a hole into an AWS EC2 security group temporarily
 ...
 """
 
@@ -10,11 +10,11 @@ from setuptools import setup
 
 setup(
     name='firewall',
-    version='0.1.0',
+    version='0.2.0',
     author='Matt Robenolt',
     author_email='matt@ydekproductions.com',
     url='https://github.com/mattrobenolt/firewall',
-    description='...',
+    description='Punch a hole into an AWS EC2 security group temporarily',
     long_description=__doc__,
     install_requires=[
         'boto',

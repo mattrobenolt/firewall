@@ -14,7 +14,7 @@ except ImportError:
 import ec2
 
 __author__ = 'Matt Robenolt <matt@ydekproductions.com>'
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 CREDENTIALS_TEMPLATE = """
 "User Name","Access Key Id","Secret Access Key"
